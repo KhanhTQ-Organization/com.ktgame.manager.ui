@@ -10,7 +10,7 @@ using Sirenix.OdinInspector;
 
 namespace com.ktgame.manager.ui
 {
-	[CreateAssetMenu(fileName = "WindowContainerSettings", menuName = "Unimob/View/Window Container Settings", order = 1)]
+	[CreateAssetMenu(fileName = "WindowContainerSettings", menuName = "Ktgame/View/Window Container Settings", order = 1)]
 	public class WindowContainerSettings : ScriptableObject
 	{
 		[SerializeField] private WindowContainerConfig[] _containers;
