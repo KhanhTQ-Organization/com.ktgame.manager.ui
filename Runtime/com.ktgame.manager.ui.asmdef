@@ -1,0 +1,24 @@
+{
+    "name": "com.ktgame.manager.ui",
+    "rootNamespace": "com.ktgame.manager.ui",
+    "references": [
+        "GUID:ea2ae37156ab74bd0b7bf06641413d82",
+        "GUID:caeb0a032b91c4db0a3ec4b762381f71",
+        "GUID:200a4385217cc3c4aa09540ee4f3110d",
+        "GUID:b8ea6a5d7ecec4623acfeb7e9154a948",
+        "GUID:b9d2710be458f3a4db36cac2ec4e4066",
+        "GUID:cbec07bfd92f946e093a3d28ad7df2b8",
+        "GUID:be98f130589574d3cbfd7db0fcf21eea",
+        "GUID:f51ebe6a0ceec4240a699833d6309b23",
+        "com.ktgame.unregister"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
