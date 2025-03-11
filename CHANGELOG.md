@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.0...v1.0.1) (2025-03-11)
+
+
+### Bug Fixes
+
+* release manager ui ([29b098c](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/commit/29b098ca23af7bf1054843c60d71e70abd7ce092))
+
 # 1.0.0 (2025-03-11)
 
 
