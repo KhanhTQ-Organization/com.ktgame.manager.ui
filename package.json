@@ -10,6 +10,12 @@
     "url": "https://github.com/KhanhTQ-hub"
   },
   "dependencies": {
+    "com.ktgame.core": "1.0.5",
+    "com.ktgame.foundation": "1.0.3",
+    "com.ktgame.assets.loader.core": "1.0.1",
+    "com.ktgame.assets.loader.resources": "1.0.1",
+    "com.ktgame.unregister": "1.0.1",
+    "com.ktgame.utils.class-type-reference": "1.0.1",
     "com.ktgame.unitask": "1.0.1"
   }
 }
