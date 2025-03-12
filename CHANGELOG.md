@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.2...v1.0.3) (2025-03-12)
+
+
+### Bug Fixes
+
+* dependency ui ([e7306a9](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/commit/e7306a9cb62058af820be70cfa7be3c5ab277c61))
+
 ## [1.0.2](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.1...v1.0.2) (2025-03-11)
 
 
