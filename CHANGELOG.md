@@ -1,3 +1,10 @@
+## [1.0.4](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.3...v1.0.4) (2025-05-23)
+
+
+### Bug Fixes
+
+* update tabSheetView ([071f3f1](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/commit/071f3f1a20b47160c21cab53befeb22cfc74e72c))
+
 ## [1.0.3](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.2...v1.0.3) (2025-03-12)
 
 
