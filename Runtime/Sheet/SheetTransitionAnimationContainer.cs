@@ -6,7 +6,7 @@ using UnityEngine;
 namespace com.ktgame.manager.ui
 {
     [Serializable]
-    public class SheetTransitionAnimationContainer : MonoBehaviour
+    public class SheetTransitionAnimationContainer
     {
         [SerializeField] private List<TransitionAnimation> _enterAnimations = new();
         [SerializeField] private List<TransitionAnimation> _exitAnimations = new();
