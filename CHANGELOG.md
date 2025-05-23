@@ -1,3 +1,10 @@
+## [1.0.5](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.4...v1.0.5) (2025-05-23)
+
+
+### Bug Fixes
+
+* update tabDataSource ([67d95f1](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/commit/67d95f1057e0e92613ec3eea239576863b8fdc62))
+
 ## [1.0.4](https://github.com/KhanhTQ-hub/com.ktgame.manager.ui/compare/v1.0.3...v1.0.4) (2025-05-23)
 
 
