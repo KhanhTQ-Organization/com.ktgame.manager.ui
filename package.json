@@ -17,5 +17,8 @@
     "com.ktgame.unregister": "1.0.2",
     "com.ktgame.utils.class-type-reference": "1.0.2",
     "com.ktgame.unitask": "1.0.3"
+  },
+  "publishConfig": {
+    "registry": "http://3.25.208.95:4873"
   }
 }
