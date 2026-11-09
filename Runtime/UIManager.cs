@@ -72,8 +72,20 @@ namespace com.ktgame.manager.ui
 				}
 			}
 
-			foreach (var config in _viewConfigs)
+			foreach (var config in _viewConfigs ?? (IEnumerable<ViewConfigObject>)Array.Empty<ViewConfigObject>())
 			{
+				if (config == null)
+				{
+					Debug.LogError("[UIManager] View config list contains an empty (null) entry - skipped.");
+					continue;
+				}
+
+				if (config.ViewPresenterType == null)
+				{
+					Debug.LogError($"[UIManager] Presenter type of view config '{config.name}' is missing (class deleted or renamed) - skipped.", config);
+					continue;
+				}
+
 				if (TryGetContainer<IWindowContainer>(config.ContainerName, out var viewContainer))
 				{
 					var viewConfig = new ViewConfig(config.AssetPath, config.PlayAnimation, config.LoadAsync, config.PoolingPolicy);

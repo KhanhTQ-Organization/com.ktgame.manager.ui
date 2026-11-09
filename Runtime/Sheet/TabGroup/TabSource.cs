@@ -19,6 +19,6 @@ namespace com.ktgame.manager.ui
 
 		public SheetView SheetView => _sheetView;
 
-		public Type SheetPresenterType => _sheetPresenterType.Type;
+		public Type SheetPresenterType => _sheetPresenterType?.Type;
 	}
 }

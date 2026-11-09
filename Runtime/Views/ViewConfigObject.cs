@@ -17,7 +17,7 @@ namespace com.ktgame.manager.ui
 		[SerializeField, FoldoutGroup("$_viewPresenterType"), ContainerName] private string _containerName;
 		[SerializeField, FoldoutGroup("$_viewPresenterType")] private PoolingPolicy _poolingPolicy = PoolingPolicy.UseSettings;
 
-		public Type ViewPresenterType => _viewPresenterType.Type;
+		public Type ViewPresenterType => _viewPresenterType?.Type;
 
 		public bool LoadAsync => _loadAsync;
 
