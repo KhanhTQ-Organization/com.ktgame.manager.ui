@@ -1,3 +1,10 @@
+## [1.0.10](https://github.com/KhanhTQ-Organization/com.ktgame.manager.ui/compare/v1.0.9...v1.0.10) (2026-11-09)
+
+
+### Bug Fixes
+
+* big update view ([063e8c1](https://github.com/KhanhTQ-Organization/com.ktgame.manager.ui/commit/063e8c1c49a1b1c0005b1c279f253b70f3988a94))
+
 ## [1.0.9](https://github.com/KhanhTQ-Organization/com.ktgame.manager.ui/compare/v1.0.8...v1.0.9) (2026-08-13)
 
 
