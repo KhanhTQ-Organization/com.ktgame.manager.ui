@@ -76,7 +76,8 @@ namespace com.ktgame.manager.ui
 					button = gameObject.AddComponent<Button>();
 					button.transition = Selectable.Transition.None;
 				}
-
+				
+				button.onClick.RemoveListener(CloseModalOnClick);
 				button.onClick.AddListener(CloseModalOnClick);
 			}
 			else
@@ -95,8 +96,8 @@ namespace com.ktgame.manager.ui
 			{
 				return;
 			}
-
-			if (_modalContainer.IsInTransition)
+			
+			if (_modalContainer.IsInTransition || _modalContainer.HasPendingTransition)
 			{
 				return;
 			}

@@ -8,6 +8,8 @@ namespace com.ktgame.manager.ui
 	public class ModalContainer : WindowContainer
 	{
 		public bool IsInTransition { get; private set; }
+		
+		internal bool HasPendingTransition => _transitionQueue.HasPending;
 
 		public override int ViewCount => _modalViews.Count;
 
@@ -19,6 +21,7 @@ namespace com.ktgame.manager.ui
 
 		private readonly List<ViewRef<ModalView>> _modalViews = new();
 		private readonly List<ViewRef<ModalBackdrop>> _backdrops = new();
+		private readonly TransitionQueue _transitionQueue = new();
 		private bool _disableBackdrop;
 
 		protected override void OnInitialize()
@@ -172,13 +175,14 @@ namespace com.ktgame.manager.ui
 				throw new ArgumentNullException(nameof(resourcePath));
 			}
 
-			if (IsInTransition)
+			var transitionKey = "show:" + resourcePath;
+			if (await WaitForTransitionTurnAsync(transitionKey) == null)
 			{
-				Debug.LogWarning("Cannot transition because there is a modal already in transition.");
 				return;
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
@@ -186,50 +190,71 @@ namespace com.ktgame.manager.ui
 			}
 
 			ModalBackdrop backdrop = null;
-
-			if (_disableBackdrop == false)
+			var modalAdded = false;
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				var backdropAssetPath = GetBackdropResourcePath(config.ModalBackdropAssetPath);
-				var backdropConfig = new ViewConfig(assetPath: backdropAssetPath, playAnimation: config.Config.PlayAnimation,
-					loadAsync: config.Config.LoadAsync, poolingPolicy: PoolingPolicy.UseSettings);
+				if (_disableBackdrop == false)
+				{
+					var backdropAssetPath = GetBackdropResourcePath(config.ModalBackdropAssetPath);
+					var backdropConfig = new ViewConfig(assetPath: backdropAssetPath, playAnimation: config.Config.PlayAnimation,
+						loadAsync: config.Config.LoadAsync, poolingPolicy: PoolingPolicy.UseSettings);
 
-				backdrop = await GetViewAsync<ModalBackdrop>(backdropConfig);
-				backdrop.Setup(RectTransform, config.BackdropAlpha, config.CloseWhenClickOnBackdrop);
-				_backdrops.Add(new ViewRef<ModalBackdrop>(backdrop, backdropAssetPath, backdropConfig.PoolingPolicy));
+					backdrop = await GetViewAsync<ModalBackdrop>(backdropConfig);
+					backdrop.Setup(RectTransform, config.BackdropAlpha, config.CloseWhenClickOnBackdrop);
+					_backdrops.Add(new ViewRef<ModalBackdrop>(backdrop, backdropAssetPath, backdropConfig.PoolingPolicy));
+				}
+
+				var modalView = await GetViewAsync<TModalView>(config.Config);
+				config.Config.ViewLoadedCallback?.Invoke(modalView);
+
+				await modalView.AfterLoadAsync(RectTransform);
+
+				UIManager.ViewWillOpen?.Invoke(modalView);
+
+				await modalView.BeforeEnterAsync(true);
+
+				var animTasks = new List<UniTask>();
+
+				if (backdrop)
+				{
+					animTasks.Add(backdrop.EnterAsync(playAnimation));
+				}
+
+				animTasks.Add(modalView.EnterAsync(true, playAnimation));
+
+				await UniTask.WhenAll(animTasks);
+
+				_modalViews.Add(new ViewRef<ModalView>(modalView, resourcePath, config.Config.PoolingPolicy));
+				modalAdded = true;
+
+				IsInTransition = false;
+				lockReleased = true;
+
+				modalView.AfterEnter(true);
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				UIManager.ViewOpened?.Invoke(modalView);
+
+				completed = true;
 			}
-
-			var modalView = await GetViewAsync<TModalView>(config.Config);
-			config.Config.ViewLoadedCallback?.Invoke(modalView);
-
-			await modalView.AfterLoadAsync(RectTransform);
-
-			UIManager.ViewWillOpen?.Invoke(modalView);
-
-			await modalView.BeforeEnterAsync(true);
-
-			var animTasks = new List<UniTask>();
-
-			if (backdrop)
+			finally
 			{
-				animTasks.Add(backdrop.EnterAsync(playAnimation));
+				if (completed == false)
+				{
+					if (modalAdded == false && backdrop)
+					{
+						RemoveBackdropOf(backdrop);
+					}
+
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
-
-			animTasks.Add(modalView.EnterAsync(true, playAnimation));
-
-			await UniTask.WhenAll(animTasks);
-
-			_modalViews.Add(new ViewRef<ModalView>(modalView, resourcePath, config.Config.PoolingPolicy));
-
-			IsInTransition = false;
-
-			modalView.AfterEnter(true);
-
-			if (Settings.EnableInteractionInTransition == false)
-			{
-				Interactable = true;
-			}
-
-			UIManager.ViewOpened?.Invoke(modalView);
 		}
 
 		private async UniTask HideAsyncInternal(bool playAnimation)
@@ -240,69 +265,100 @@ namespace com.ktgame.manager.ui
 				return;
 			}
 
-			if (IsInTransition)
+			const string transitionKey = "hide:top";
+			var waited = await WaitForTransitionTurnAsync(transitionKey);
+			if (waited == null)
 			{
-				Debug.LogWarning("Cannot transition because there is a modal already in transition.");
+				return;
+			}
+			
+			if (waited.Value && _modalViews.Count == 0)
+			{
+				Debug.LogWarning("[ModalContainer] Hide skipped: the modal stack became empty while waiting for the previous transition.");
 				return;
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var lastModalIndex = _modalViews.Count - 1;
-			var exitModalRef = _modalViews[lastModalIndex];
-			var modalView = exitModalRef.View;
-			modalView.Settings = Settings;
-
 			ViewRef<ModalBackdrop>? backdrop = null;
-
-			if (_disableBackdrop == false)
+			var backdropIndex = -1;
+			var modalRemoved = false;
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				var lastBackdropIndex = _backdrops.Count - 1;
-				var lastBackdrop = _backdrops[lastBackdropIndex];
-				_backdrops.RemoveAt(lastBackdropIndex);
+				var lastModalIndex = _modalViews.Count - 1;
+				var exitModalRef = _modalViews[lastModalIndex];
+				var modalView = exitModalRef.View;
+				modalView.Settings = Settings;
 
-				lastBackdrop.View.Settings = Settings;
-				backdrop = lastBackdrop;
+				if (_disableBackdrop == false)
+				{
+					var lastBackdropIndex = _backdrops.Count - 1;
+					var lastBackdrop = _backdrops[lastBackdropIndex];
+					_backdrops.RemoveAt(lastBackdropIndex);
+					backdropIndex = lastBackdropIndex;
+
+					lastBackdrop.View.Settings = Settings;
+					backdrop = lastBackdrop;
+				}
+
+				UIManager.ViewWillClose?.Invoke(modalView);
+
+				await modalView.BeforeEnterAsync(false);
+
+				var animTask = new List<UniTask> { modalView.EnterAsync(false, playAnimation) };
+
+				if (backdrop.HasValue && backdrop.Value.View)
+				{
+					animTask.Add(backdrop.Value.View.ExitAsync(playAnimation));
+				}
+
+				await UniTask.WhenAll(animTask);
+
+				_modalViews.RemoveAt(lastModalIndex);
+				modalRemoved = true;
+				IsInTransition = false;
+				lockReleased = true;
+
+				modalView.AfterEnter(false);
+
+				await modalView.BeforeReleaseAsync();
+
+				DestroyAndForget(exitModalRef);
+
+				if (backdrop.HasValue)
+				{
+					DestroyAndForget(backdrop.Value);
+				}
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				UIManager.ViewClosed?.Invoke(modalView);
+
+				completed = true;
 			}
-
-			UIManager.ViewWillClose?.Invoke(modalView);
-
-			await modalView.BeforeEnterAsync(false);
-
-			var animTask = new List<UniTask> { modalView.EnterAsync(false, playAnimation) };
-
-			if (backdrop.HasValue && backdrop.Value.View)
+			finally
 			{
-				animTask.Add(backdrop.Value.View.ExitAsync(playAnimation));
+				if (completed == false)
+				{
+					if (modalRemoved == false && backdrop.HasValue && backdropIndex >= 0 && backdropIndex <= _backdrops.Count)
+					{
+						_backdrops.Insert(backdropIndex, backdrop.Value);
+					}
+
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
-
-			await UniTask.WhenAll(animTask);
-
-			_modalViews.RemoveAt(lastModalIndex);
-			IsInTransition = false;
-
-			modalView.AfterEnter(false);
-
-			await modalView.BeforeReleaseAsync();
-
-			DestroyAndForget(exitModalRef);
-
-			if (backdrop.HasValue)
-			{
-				DestroyAndForget(backdrop.Value);
-			}
-
-			if (Settings.EnableInteractionInTransition == false)
-			{
-				Interactable = true;
-			}
-
-			UIManager.ViewClosed?.Invoke(modalView);
 		}
 
 		private async UniTask HideAsyncInternal(ModalView view, bool playAnimation)
@@ -313,75 +369,108 @@ namespace com.ktgame.manager.ui
 				return;
 			}
 
-			if (IsInTransition)
+			var transitionKey = "hide:" + (view ? view.GetInstanceID() : 0);
+			var waited = await WaitForTransitionTurnAsync(transitionKey);
+			if (waited == null)
 			{
-				Debug.LogWarning("Cannot transition because there is a modal already in transition.");
+				return;
+			}
+			
+			var exitModalIndex = _modalViews.FindIndex(x => x.View == view);
+
+			if (exitModalIndex == -1)
+			{
+				if (waited.Value)
+				{
+					Debug.LogWarning($"[ModalContainer] Hide skipped: the modal view `{view}` was already closed while waiting for the previous transition.");
+				}
+				else
+				{
+					Debug.LogError($"Cannot find the modal view `{view}` on the stack.");
+				}
+
 				return;
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var exitModalIndex = _modalViews.FindIndex(x => x.View == view);
-
-			if (exitModalIndex == -1)
-			{
-				Debug.LogError($"Cannot find the modal view `{view}` on the stack.");
-				return;
-			}
-
-			var exitModalRef = _modalViews[exitModalIndex];
-			var modalView = exitModalRef.View;
-			modalView.Settings = Settings;
-
 			ViewRef<ModalBackdrop>? backdrop = null;
-
-			if (_disableBackdrop == false)
+			var backdropIndex = -1;
+			var modalRemoved = false;
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				var lastBackdrop = _backdrops[exitModalIndex];
-				_backdrops.RemoveAt(exitModalIndex);
+				var exitModalRef = _modalViews[exitModalIndex];
+				var modalView = exitModalRef.View;
+				modalView.Settings = Settings;
 
-				lastBackdrop.View.Settings = Settings;
-				backdrop = lastBackdrop;
+				if (_disableBackdrop == false)
+				{
+					var lastBackdrop = _backdrops[exitModalIndex];
+					_backdrops.RemoveAt(exitModalIndex);
+					backdropIndex = exitModalIndex;
+
+					lastBackdrop.View.Settings = Settings;
+					backdrop = lastBackdrop;
+				}
+
+				UIManager.ViewWillClose?.Invoke(modalView);
+
+				await modalView.BeforeEnterAsync(false);
+
+				var animTask = new List<UniTask> { modalView.EnterAsync(false, playAnimation) };
+
+				if (backdrop.HasValue && backdrop.Value.View)
+				{
+					animTask.Add(backdrop.Value.View.ExitAsync(playAnimation));
+				}
+
+				await UniTask.WhenAll(animTask);
+
+				_modalViews.RemoveAt(exitModalIndex);
+				modalRemoved = true;
+				IsInTransition = false;
+				lockReleased = true;
+
+				modalView.AfterEnter(false);
+
+				await modalView.BeforeReleaseAsync();
+
+				DestroyAndForget(exitModalRef);
+
+				if (backdrop.HasValue)
+				{
+					DestroyAndForget(backdrop.Value);
+				}
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				UIManager.ViewClosed?.Invoke(modalView);
+
+				completed = true;
 			}
-
-			UIManager.ViewWillClose?.Invoke(modalView);
-
-			await modalView.BeforeEnterAsync(false);
-
-			var animTask = new List<UniTask> { modalView.EnterAsync(false, playAnimation) };
-
-			if (backdrop.HasValue && backdrop.Value.View)
+			finally
 			{
-				animTask.Add(backdrop.Value.View.ExitAsync(playAnimation));
+				if (completed == false)
+				{
+					if (modalRemoved == false && backdrop.HasValue && backdropIndex >= 0 && backdropIndex <= _backdrops.Count)
+					{
+						_backdrops.Insert(backdropIndex, backdrop.Value);
+					}
+
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
-
-			await UniTask.WhenAll(animTask);
-
-			_modalViews.RemoveAt(exitModalIndex);
-			IsInTransition = false;
-
-			modalView.AfterEnter(false);
-
-			await modalView.BeforeReleaseAsync();
-
-			DestroyAndForget(exitModalRef);
-
-			if (backdrop.HasValue)
-			{
-				DestroyAndForget(backdrop.Value);
-			}
-
-			if (Settings.EnableInteractionInTransition == false)
-			{
-				Interactable = true;
-			}
-
-			UIManager.ViewClosed?.Invoke(modalView);
 		}
 
 		private async UniTask HideAllAsyncInternal(bool playAnimation = true)
@@ -412,6 +501,51 @@ namespace com.ktgame.manager.ui
 			return string.IsNullOrWhiteSpace(assetPath)
 				? Settings.ModalBackdropResourcePath
 				: assetPath;
+		}
+		
+		private async UniTask<bool?> WaitForTransitionTurnAsync(string transitionKey)
+		{
+			if (IsInTransition == false && _transitionQueue.HasPending == false)
+			{
+				return false;
+			}
+
+			if (_transitionQueue.IsDuplicate(transitionKey, IsInTransition))
+			{
+				Debug.LogWarning("Cannot transition because there is a modal already in transition.");
+				return null;
+			}
+
+			var gotTurn = await _transitionQueue.WaitForTurnAsync(transitionKey, () => IsInTransition, this.GetCancellationTokenOnDestroy());
+			return gotTurn ? true : (bool?)null;
+		}
+		
+		private void RemoveBackdropOf(ModalBackdrop backdrop)
+		{
+			var index = _backdrops.FindIndex(x => x.View == backdrop);
+			if (index < 0)
+			{
+				return;
+			}
+
+			var backdropRef = _backdrops[index];
+			_backdrops.RemoveAt(index);
+			DestroyAndForget(backdropRef);
+		}
+		
+		private void RecoverFromFailedTransition(bool lockReleased)
+		{
+			if (lockReleased == false)
+			{
+				IsInTransition = false;
+			}
+
+			if (Settings.EnableInteractionInTransition == false)
+			{
+				Interactable = true;
+			}
+
+			Debug.LogWarning($"[ModalContainer] Transition in `{ContainerName}` failed, transition state has been restored.");
 		}
 	}
 }

@@ -62,7 +62,7 @@ namespace com.ktgame.manager.ui
 
 		public bool IsValid(string partnerScreenIdentifier)
 		{
-			if (GetAnimation() == null)
+			if (HasAnimationAsset() == false)
 			{
 				return false;
 			}
@@ -92,9 +92,22 @@ namespace com.ktgame.manager.ui
 				case AnimationAssetType.MonoBehaviour:
 					return _animationBehaviour;
 				case AnimationAssetType.ScriptableObject:
-					return Object.Instantiate(_animationObject);
+					return _animationObject == null ? null : Object.Instantiate(_animationObject);
 				default:
 					return null;
+			}
+		}
+
+		private bool HasAnimationAsset()
+		{
+			switch (_assetType)
+			{
+				case AnimationAssetType.MonoBehaviour:
+					return _animationBehaviour != null;
+				case AnimationAssetType.ScriptableObject:
+					return _animationObject != null;
+				default:
+					return false;
 			}
 		}
 	}

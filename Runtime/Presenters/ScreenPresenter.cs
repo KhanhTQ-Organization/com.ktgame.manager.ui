@@ -7,23 +7,15 @@ namespace com.ktgame.manager.ui
 		protected ScreenPresenter(IUIManager uiManager, IViewContainer viewContainer, IViewConfig viewConfig) : base(uiManager, viewContainer,
 			viewConfig) { }
 
-		UniTask IScreenLifecycleEvent.WillPushEnter()
+		async UniTask IScreenLifecycleEvent.WillPushEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.WillEnter();
-			}
-
-			return ViewWillPushEnter(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillEnter(), this);
+			await ViewWillPushEnter(View);
 		}
 
 		void IScreenLifecycleEvent.DidPushEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.DidEnter();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidEnter(), this);
 			ViewDidPushEnter(View);
 		}
 
@@ -47,23 +39,15 @@ namespace com.ktgame.manager.ui
 			ViewDidPopEnter(View);
 		}
 
-		UniTask IScreenLifecycleEvent.WillPopExit()
+		async UniTask IScreenLifecycleEvent.WillPopExit()
 		{
-			foreach (var child in Children)
-			{
-				child.WillExit();
-			}
-
-			return ViewWillPopExit(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillExit(), this);
+			await ViewWillPopExit(View);
 		}
 
 		void IScreenLifecycleEvent.DidPopExit()
 		{
-			foreach (var child in Children)
-			{
-				child.DidExit();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidExit(), this);
 			ViewDidPopExit(View);
 		}
 
@@ -149,23 +133,15 @@ namespace com.ktgame.manager.ui
 		protected ScreenPresenter(IUIManager uiManager, IViewContainer viewContainer, IViewConfig viewConfig) : base(uiManager, viewContainer,
 			viewConfig) { }
 
-		UniTask IScreenLifecycleEvent.WillPushEnter()
+		async UniTask IScreenLifecycleEvent.WillPushEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.WillEnter();
-			}
-
-			return ViewWillPushEnter(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillEnter(), this);
+			await ViewWillPushEnter(View);
 		}
 
 		void IScreenLifecycleEvent.DidPushEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.DidEnter();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidEnter(), this);
 			ViewDidPushEnter(View);
 		}
 
@@ -189,23 +165,15 @@ namespace com.ktgame.manager.ui
 			ViewDidPopEnter(View);
 		}
 
-		UniTask IScreenLifecycleEvent.WillPopExit()
+		async UniTask IScreenLifecycleEvent.WillPopExit()
 		{
-			foreach (var child in Children)
-			{
-				child.WillExit();
-			}
-
-			return ViewWillPopExit(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillExit(), this);
+			await ViewWillPopExit(View);
 		}
 
 		void IScreenLifecycleEvent.DidPopExit()
 		{
-			foreach (var child in Children)
-			{
-				child.DidExit();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidExit(), this);
 			ViewDidPopExit(View);
 		}
 

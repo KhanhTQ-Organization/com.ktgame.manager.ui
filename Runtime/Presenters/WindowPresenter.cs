@@ -13,6 +13,8 @@ namespace com.ktgame.manager.ui
 		public IViewConfig ViewConfig { get; private set; }
 
 		[SerializeReference] protected readonly List<IViewPresenter> Children = new();
+		
+		private readonly Dictionary<IViewPresenter, TWindow> _childOwners = new();
 
 		protected WindowPresenter(IUIManager uiManager, IViewContainer viewContainer, IViewConfig viewConfig) : base(uiManager)
 		{
@@ -71,68 +73,45 @@ namespace com.ktgame.manager.ui
 
 		public override void UnRegister()
 		{
+			var destroyedView = View;
 			base.UnRegister();
-			Children.Clear();
+			RemoveChildrenOf(destroyedView, true);
+		}
+		
+		async UniTask IViewLifecycleEvent.Initialize()
+		{
+			await ChildLifecycle.RunAsync(Children, c => c.Initialize(), this);
+			await ViewDidLoad(View);
 		}
 
-		UniTask IViewLifecycleEvent.Initialize()
+		async UniTask IViewLifecycleEvent.WillEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.Initialize();
-			}
-
-			return ViewDidLoad(View);
-		}
-
-		UniTask IViewLifecycleEvent.WillEnter()
-		{
-			foreach (var child in Children)
-			{
-				child.WillEnter();
-			}
-
-			return ViewWillEnter(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillEnter(), this);
+			await ViewWillEnter(View);
 		}
 
 		void IViewLifecycleEvent.DidEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.DidEnter();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidEnter(), this);
 			ViewDidEnter(View);
 		}
 
-		UniTask IViewLifecycleEvent.WillExit()
+		async UniTask IViewLifecycleEvent.WillExit()
 		{
-			foreach (var child in Children)
-			{
-				child.WillExit();
-			}
-
-			return ViewWillExit(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillExit(), this);
+			await ViewWillExit(View);
 		}
 
 		void IViewLifecycleEvent.DidExit()
 		{
-			foreach (var child in Children)
-			{
-				child.DidExit();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidExit(), this);
 			ViewDidExit(View);
 		}
 
-		UniTask IViewLifecycleEvent.Cleanup()
+		async UniTask IViewLifecycleEvent.Cleanup()
 		{
-			foreach (var child in Children)
-			{
-				child.Cleanup();
-			}
-
-			return ViewWillDestroy(View);
+			await ChildLifecycle.RunAsync(Children, c => c.Cleanup(), this);
+			await ViewWillDestroy(View);
 		}
 
 		protected abstract void AddChildren();
@@ -225,6 +204,7 @@ namespace com.ktgame.manager.ui
 			var presenter = (TPresenter)Activator.CreateInstance(type, UIManager, view);
 			presenter.Parent = this;
 			Children.Add(presenter);
+			_childOwners[presenter] = View;
 			return presenter;
 		}
 
@@ -254,6 +234,7 @@ namespace com.ktgame.manager.ui
 			var presenter = (TPresenter)Activator.CreateInstance(type, UIManager, view);
 			presenter.Parent = this;
 			Children.Add(presenter);
+			_childOwners[presenter] = View;
 			return presenter;
 		}
 
@@ -261,14 +242,144 @@ namespace com.ktgame.manager.ui
 		{
 			if (!view.IsInitialized)
 			{
+				_cachedChildViews = null;
+
 				View = (TWindow)view;
 				ViewName = view.Name;
 				UIManager.Injector.Resolve(View);
 				Initialize(View);
 				AddChildren();
-				this.UnRegisterWhenGameObjectDestroyed(View.Owner);
+				new ViewDestroyedHandler(this, View).UnRegisterWhenGameObjectDestroyed(View.Owner);
 				view.IsInitialized = true;
 			}
+		}
+
+		private void OnViewDestroyed(TWindow destroyedView)
+		{
+			if (ReferenceEquals(View, destroyedView))
+			{
+				UnRegister();
+				return;
+			}
+			
+			try
+			{
+				Dispose(destroyedView);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
+
+			RemoveChildrenOf(destroyedView, false);
+		}
+		
+		private void RemoveChildrenOf(TWindow owner, bool includeUnowned)
+		{
+			for (var i = Children.Count - 1; i >= 0; i--)
+			{
+				var child = Children[i];
+				var hasOwner = _childOwners.TryGetValue(child, out var childOwner);
+				var belongsToOwner = hasOwner ? ReferenceEquals(childOwner, owner) : includeUnowned;
+
+				if (belongsToOwner == false)
+				{
+					continue;
+				}
+
+				Children.RemoveAt(i);
+				_childOwners.Remove(child);
+
+				try
+				{
+					child.Dispose();
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e);
+				}
+			}
+		}
+		
+		private sealed class ViewDestroyedHandler : IUnRegister
+		{
+			private WindowPresenter<TWindow> _presenter;
+			private readonly TWindow _view;
+
+			public ViewDestroyedHandler(WindowPresenter<TWindow> presenter, TWindow view)
+			{
+				_presenter = presenter;
+				_view = view;
+			}
+
+			public void UnRegister()
+			{
+				var presenter = _presenter;
+				_presenter = null;
+				presenter?.OnViewDestroyed(_view);
+			}
+		}
+	}
+	
+	internal static class ChildLifecycle
+	{
+		public static UniTask RunAsync(List<IViewPresenter> children, Func<IViewPresenter, UniTask> step, object owner)
+		{
+			if (children.Count == 0)
+			{
+				return UniTask.CompletedTask;
+			}
+			
+			var tasks = new UniTask[children.Count];
+			for (var i = 0; i < children.Count; i++)
+			{
+				tasks[i] = RunOneAsync(children[i], step, owner);
+			}
+
+			return UniTask.WhenAll(tasks);
+		}
+
+		public static void Run(List<IViewPresenter> children, Action<IViewPresenter> step, object owner)
+		{
+			if (children.Count == 0)
+			{
+				return;
+			}
+
+			var snapshot = children.ToArray();
+			foreach (var child in snapshot)
+			{
+				try
+				{
+					step(child);
+				}
+				catch (Exception e)
+				{
+					LogChildError(child, owner, e);
+				}
+			}
+		}
+
+		private static async UniTask RunOneAsync(IViewPresenter child, Func<IViewPresenter, UniTask> step, object owner)
+		{
+			try
+			{
+				await step(child);
+			}
+			catch (OperationCanceledException)
+			{
+				
+			}
+			catch (Exception e)
+			{
+				LogChildError(child, owner, e);
+			}
+		}
+
+		private static void LogChildError(IViewPresenter child, object owner, Exception e)
+		{
+			Debug.LogError($"[UI] Child presenter {child?.GetType().Name} of {owner?.GetType().Name} failed: {e.Message}");
+			Debug.LogException(e);
 		}
 	}
 

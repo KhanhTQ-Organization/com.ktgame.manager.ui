@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using com.ktgame.foundation.extensions.unity;
+using com.ktgame.foundation.priorityCollection;
 using Cysharp.Threading.Tasks;
 using Sirenix.OdinInspector;
 using UnityEngine;
@@ -179,6 +181,34 @@ namespace com.ktgame.manager.ui
 			_identifier = _usePrefabNameAsIdentifier
 				? gameObject.name.Replace("(Clone)", string.Empty)
 				: _identifier;
+		}
+		
+		protected static UniTask RunLifecycleAsync<TEvent>(UniquePriorityList<TEvent> events, Func<TEvent, UniTask> step)
+		{
+			return events.Count == 0 ? UniTask.CompletedTask : RunLifecycleCoreAsync(events, step);
+		}
+
+		private static async UniTask RunLifecycleCoreAsync<TEvent>(UniquePriorityList<TEvent> events, Func<TEvent, UniTask> step)
+		{
+			try
+			{
+				foreach (var lifecycleEvent in events)
+				{
+					var task = step(lifecycleEvent);
+					try
+					{
+						await task;
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
 		}
 
 		protected static async UniTask WaitForAsync(IEnumerable<UniTask> tasks)

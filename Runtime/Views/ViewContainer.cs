@@ -14,6 +14,12 @@ namespace com.ktgame.manager.ui
 		private IAssetLoader _assetLoader;
 		private readonly Dictionary<string, AssetRequest<GameObject>> _assetPathToRequest = new();
 		private readonly Dictionary<string, Queue<View>> _assetPathToPool = new();
+		
+		private readonly Dictionary<string, HashSet<View>> _assetPathToInstances = new();
+		
+		private readonly Dictionary<string, int> _assetPathToPendingLoads = new();
+
+		private bool _isContainerDestroyed;
 
 		public IAssetLoader AssetLoader
 		{
@@ -46,6 +52,8 @@ namespace com.ktgame.manager.ui
 
 		protected override void OnDestroy()
 		{
+			_isContainerDestroyed = true;
+
 			foreach ((var assetPath, var pool) in _assetPathToPool)
 			{
 				while (pool.TryDequeue(out var view))
@@ -55,6 +63,141 @@ namespace com.ktgame.manager.ui
 			}
 
 			_assetPathToPool.Clear();
+			
+			ReleaseUnusedRequestsAfterFrame().Forget();
+		}
+
+		private async UniTaskVoid ReleaseUnusedRequestsAfterFrame()
+		{
+			await UniTask.NextFrame();
+
+			var assetPaths = new List<string>(_assetPathToRequest.Keys);
+			foreach (var assetPath in assetPaths)
+			{
+				TryReleaseRequest(assetPath);
+			}
+		}
+		
+		private AssetRequest<GameObject> AcquireRequest(string assetPath, bool loadAsync)
+		{
+			if (_assetPathToRequest.TryGetValue(assetPath, out var request))
+			{
+				return request;
+			}
+
+			request = loadAsync
+				? AssetLoader.LoadAsync<GameObject>(assetPath)
+				: AssetLoader.Load<GameObject>(assetPath);
+
+			_assetPathToRequest[assetPath] = request;
+			return request;
+		}
+
+		private void BeginLoad(string assetPath)
+		{
+			_assetPathToPendingLoads.TryGetValue(assetPath, out var count);
+			_assetPathToPendingLoads[assetPath] = count + 1;
+		}
+
+		private void EndLoad(string assetPath)
+		{
+			if (_assetPathToPendingLoads.TryGetValue(assetPath, out var count) == false)
+			{
+				return;
+			}
+
+			if (count <= 1)
+			{
+				_assetPathToPendingLoads.Remove(assetPath);
+			}
+			else
+			{
+				_assetPathToPendingLoads[assetPath] = count - 1;
+			}
+			
+			if (_isContainerDestroyed)
+			{
+				ReleaseWhenUnusedAfterFrame(assetPath).Forget();
+			}
+		}
+
+		private async UniTaskVoid ReleaseWhenUnusedAfterFrame(string assetPath)
+		{
+			await UniTask.NextFrame();
+			TryReleaseRequest(assetPath);
+		}
+
+		private void TrackInstance(string assetPath, View view)
+		{
+			if (_assetPathToInstances.TryGetValue(assetPath, out var instances) == false)
+			{
+				_assetPathToInstances[assetPath] = instances = new HashSet<View>();
+			}
+
+			instances.Add(view);
+		}
+
+		private void UntrackInstance(string assetPath, View view)
+		{
+			if (_assetPathToInstances.TryGetValue(assetPath, out var instances))
+			{
+				instances.Remove(view);
+			}
+		}
+		
+		private void DiscardFailedRequest(string assetPath, AssetRequest<GameObject> request)
+		{
+			if (_assetPathToRequest.TryGetValue(assetPath, out var current) == false || ReferenceEquals(current, request) == false)
+			{
+				return;
+			}
+
+			_assetPathToRequest.Remove(assetPath);
+			SafeRelease(assetPath, request);
+		}
+		
+		private void TryReleaseRequest(string assetPath)
+		{
+			if (_assetPathToRequest.TryGetValue(assetPath, out var request) == false)
+			{
+				return;
+			}
+
+			if (_assetPathToPendingLoads.TryGetValue(assetPath, out var pending) && pending > 0)
+			{
+				return;
+			}
+
+			if (_assetPathToInstances.TryGetValue(assetPath, out var instances))
+			{
+				instances.RemoveWhere(v => v == null);
+				if (instances.Count > 0)
+				{
+					return;
+				}
+
+				_assetPathToInstances.Remove(assetPath);
+			}
+
+			if (ContainsInPool(assetPath))
+			{
+				return;
+			}
+
+			_assetPathToRequest.Remove(assetPath);
+			SafeRelease(assetPath, request);
+		}
+
+		private void SafeRelease(string assetPath, AssetRequest<GameObject> request)
+		{
+			try
+			{
+				AssetLoader.Release(request);
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning($"[ViewContainer] Failed to release asset request for `{assetPath}`: {e.Message}");
+			}
 		}
 
 		public int CountInPool(string assetPath)
@@ -95,6 +238,7 @@ namespace com.ktgame.manager.ui
 			{
 				if (pool.TryDequeue(out var view))
 				{
+					UntrackInstance(assetPath, view);
 					if (view && view.gameObject)
 					{
 						Destroy(view.gameObject);
@@ -108,11 +252,7 @@ namespace com.ktgame.manager.ui
 				await UniTask.NextFrame();
 			}
 
-			if (pool.Count < 1 && _assetPathToRequest.TryGetValue(assetPath, out var request))
-			{
-				AssetLoader.Release(request);
-				_assetPathToRequest.Remove(assetPath);
-			}
+			TryReleaseRequest(assetPath);
 		}
 
 		public void Preload(string assetPath, bool loadAsync = true, int amount = 1)
@@ -142,22 +282,32 @@ namespace com.ktgame.manager.ui
 			{
 				return;
 			}
+			
+			var assetRequest = AcquireRequest(assetPath, loadAsync);
 
-			var assetRequest = loadAsync
-				? AssetLoader.LoadAsync<GameObject>(assetPath)
-				: AssetLoader.Load<GameObject>(assetPath);
-
-			while (assetRequest.IsDone == false)
+			BeginLoad(assetPath);
+			try
 			{
-				await UniTask.NextFrame();
+				while (assetRequest.IsDone == false)
+				{
+					await UniTask.NextFrame();
+				}
+			}
+			finally
+			{
+				EndLoad(assetPath);
 			}
 
 			if (assetRequest.Status == AssetRequestStatus.Failed)
 			{
+				DiscardFailedRequest(assetPath, assetRequest);
 				throw assetRequest.OperationException;
 			}
-
-			_assetPathToRequest[assetPath] = assetRequest;
+			
+			if (_isContainerDestroyed)
+			{
+				return;
+			}
 
 			var differentAmount = amount - pool.Count;
 
@@ -175,9 +325,11 @@ namespace com.ktgame.manager.ui
 			if (instance.TryGetComponent<View>(out var view) == false)
 			{
 				Debug.LogError($"Cannot find the {nameof(View)} component on the specified resource `{assetPath}`.", instance);
+				Destroy(instance);
 				return;
 			}
 
+			TrackInstance(assetPath, view);
 			view.Settings = Settings;
 			view.RectTransform.SetParent(PoolTransform);
 			view.Parent = PoolTransform;
@@ -214,12 +366,12 @@ namespace com.ktgame.manager.ui
 			}
 			else
 			{
-				assetRequest = AssetLoader.Load<GameObject>(assetPath);
-				_assetPathToRequest[assetPath] = assetRequest;
+				assetRequest = AcquireRequest(assetPath, false);
 			}
 
 			if (assetRequest.Status == AssetRequestStatus.Failed)
 			{
+				DiscardFailedRequest(assetPath, assetRequest);
 				throw assetRequest.OperationException;
 			}
 
@@ -229,9 +381,12 @@ namespace com.ktgame.manager.ui
 			if (instance.TryGetComponent<TView>(out var view) == false)
 			{
 				Debug.LogError($"Cannot find the {typeof(TView).Name} component on the specified resource `{assetPath}`.", instance);
+				Destroy(instance);
+				ReleaseWhenUnusedAfterFrame(assetPath).Forget();
 				return null;
 			}
 
+			TrackInstance(assetPath, view);
 			view.Settings = Settings;
 			return view;
 		}
@@ -247,30 +402,31 @@ namespace com.ktgame.manager.ui
 				existView.Settings = Settings;
 				return existView;
 			}
+			
+			var assetRequest = AcquireRequest(assetPath, loadAsync);
 
-			AssetRequest<GameObject> assetRequest;
-			var handleInMap = false;
-
-			if (_assetPathToRequest.TryGetValue(assetPath, out var request))
+			BeginLoad(assetPath);
+			try
 			{
-				assetRequest = request;
-				handleInMap = true;
+				while (assetRequest.IsDone == false)
+				{
+					await UniTask.NextFrame();
+				}
 			}
-			else
+			finally
 			{
-				assetRequest = loadAsync
-					? AssetLoader.LoadAsync<GameObject>(assetPath)
-					: AssetLoader.Load<GameObject>(assetPath);
-			}
-
-			while (assetRequest.IsDone == false)
-			{
-				await UniTask.NextFrame();
+				EndLoad(assetPath);
 			}
 
 			if (assetRequest.Status == AssetRequestStatus.Failed)
 			{
+				DiscardFailedRequest(assetPath, assetRequest);
 				throw assetRequest.OperationException;
+			}
+			
+			if (_isContainerDestroyed)
+			{
+				throw new OperationCanceledException($"[ViewContainer] Container was destroyed while loading `{assetPath}`.");
 			}
 
 			var instance = Instantiate(assetRequest.Result);
@@ -279,16 +435,13 @@ namespace com.ktgame.manager.ui
 			if (instance.TryGetComponent<T>(out var view) == false)
 			{
 				Debug.LogError($"Cannot find the {typeof(T).Name} component on the specified resource `{assetPath}`.", instance);
+				Destroy(instance);
+				ReleaseWhenUnusedAfterFrame(assetPath).Forget();
 				return null;
 			}
 
+			TrackInstance(assetPath, view);
 			view.Settings = Settings;
-
-			if (handleInMap == false)
-			{
-				_assetPathToRequest[assetPath] = assetRequest;
-			}
-
 			return view;
 		}
 
@@ -304,22 +457,15 @@ namespace com.ktgame.manager.ui
 				return;
 			}
 
+			UntrackInstance(assetPath, view);
+
 			if (view && view.Owner)
 			{
 				Destroy(view.Owner);
 				await UniTask.NextFrame();
 			}
-
-			if (ContainsInPool(assetPath))
-			{
-				return;
-			}
-
-			if (_assetPathToRequest.TryGetValue(assetPath, out var request))
-			{
-				AssetLoader.Release(request);
-				_assetPathToRequest.Remove(assetPath);
-			}
+			
+			TryReleaseRequest(assetPath);
 		}
 
 		protected bool ReturnToPool<T>(ViewRef<T> viewRef) where T : View
@@ -358,7 +504,7 @@ namespace com.ktgame.manager.ui
 
 		private bool GetFromPool<T>(string assetPath, PoolingPolicy poolingPolicy, out T view) where T : View
 		{
-			if (CanPool(poolingPolicy) && _assetPathToPool.TryGetValue(assetPath, out var pool) && pool.TryDequeue(out var typelessView))
+			if (CanPool(poolingPolicy) && _assetPathToPool.TryGetValue(assetPath, out var pool) && TryDequeueAlive(pool, out var typelessView))
 			{
 				if (typelessView is T typedView)
 				{
@@ -368,6 +514,7 @@ namespace com.ktgame.manager.ui
 					return true;
 				}
 
+				UntrackInstance(assetPath, typelessView);
 				if (typelessView && typelessView.gameObject)
 				{
 					Destroy(typelessView.Owner);
@@ -375,6 +522,20 @@ namespace com.ktgame.manager.ui
 			}
 
 			view = default;
+			return false;
+		}
+		
+		private static bool TryDequeueAlive(Queue<View> pool, out View view)
+		{
+			while (pool.TryDequeue(out view))
+			{
+				if (view != null && view.Owner != null)
+				{
+					return true;
+				}
+			}
+
+			view = null;
 			return false;
 		}
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace com.ktgame.manager.ui
@@ -21,9 +20,16 @@ namespace com.ktgame.manager.ui
 		public ITransitionAnimation GetAnimation(bool push, bool enter, string partnerTransitionIdentifier)
 		{
 			var anims = GetTransitions(push, enter);
-			var anim = anims.FirstOrDefault(x => x.IsValid(partnerTransitionIdentifier));
-			var result = anim?.GetAnimation();
-			return result;
+			for (var i = 0; i < anims.Count; i++)
+			{
+				var anim = anims[i];
+				if (anim != null && anim.IsValid(partnerTransitionIdentifier))
+				{
+					return anim.GetAnimation();
+				}
+			}
+
+			return null;
 		}
 
 		public IReadOnlyList<TransitionAnimation> GetTransitions(bool push, bool enter)

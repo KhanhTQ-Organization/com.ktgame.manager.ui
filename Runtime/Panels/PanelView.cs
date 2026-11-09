@@ -11,13 +11,13 @@ namespace com.ktgame.manager.ui
 	public class PanelView : Window
 	{
 		[SerializeField] private PanelTransitionAnimationContainer _animationContainer = new();
-
-		private Progress<float> _transitionProgressReporter;
+		
+		private IProgress<float> _transitionProgressReporter;
 		private readonly UniquePriorityList<IPanelLifecycleEvent> _lifecycleEvents = new();
 
-		private Progress<float> TransitionProgressReporter
+		private IProgress<float> TransitionProgressReporter
 		{
-			get { return _transitionProgressReporter ??= new Progress<float>(SetTransitionProgress); }
+			get { return _transitionProgressReporter ??= Cysharp.Threading.Tasks.Progress.Create<float>(ReportTransitionProgress); }
 		}
 
 		public PanelTransitionAnimationContainer AnimationContainer => _animationContainer;
@@ -65,8 +65,7 @@ namespace com.ktgame.manager.ui
 
 			GetViews();
 
-			var tasks = _lifecycleEvents.Select(x => x.Initialize());
-			await WaitForAsync(tasks);
+			await RunLifecycleAsync(_lifecycleEvents, x => x.Initialize());
 		}
 
 		internal async UniTask BeforeEnterAsync(bool show)
@@ -81,11 +80,14 @@ namespace com.ktgame.manager.ui
 			SetTransitionProgress(0.0f);
 			Alpha = 0.0f;
 
-			var tasks = show
-				? _lifecycleEvents.Select(x => x.WillEnter())
-				: _lifecycleEvents.Select(x => x.WillExit());
-
-			await WaitForAsync(tasks);
+			if (show)
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillEnter());
+			}
+			else
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillExit());
+			}
 		}
 
 		internal async UniTask EnterAsync(bool show, bool playAnimation)
@@ -132,10 +134,21 @@ namespace com.ktgame.manager.ui
 			TransitionAnimationType = null;
 		}
 
-		internal async UniTask BeforeReleaseAsync()
+		internal UniTask BeforeReleaseAsync()
 		{
-			var tasks = _lifecycleEvents.Select(x => x.Cleanup());
-			await WaitForAsync(tasks);
+			return RunLifecycleAsync(_lifecycleEvents, x => x.Cleanup());
+		}
+		
+		private void ReportTransitionProgress(float progress)
+		{
+			try
+			{
+				SetTransitionProgress(progress);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
 		}
 
 		private void SetTransitionProgress(float progress)

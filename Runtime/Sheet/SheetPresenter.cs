@@ -11,6 +11,8 @@ namespace com.ktgame.manager.ui
 		public IViewContainer ViewContainer { get; private set; }
 
 		protected readonly List<IViewPresenter> Children = new();
+		
+		private bool _childrenAdded;
 
 		protected SheetPresenter(IUIManager uiManager, TSheetView view) : base(uiManager, view)
 		{
@@ -21,72 +23,53 @@ namespace com.ktgame.manager.ui
 			}
 		}
 
-		UniTask IViewLifecycleEvent.Initialize()
+		async UniTask IViewLifecycleEvent.Initialize()
 		{
-			AddChildren();
-
-			foreach (var child in Children)
+			if (_childrenAdded == false)
 			{
-				child.Initialize();
+				_childrenAdded = true;
+				AddChildren();
 			}
 
-			return ViewDidLoad(View);
+			await ChildLifecycle.RunAsync(Children, c => c.Initialize(), this);
+			await ViewDidLoad(View);
 		}
 
-		UniTask IViewLifecycleEvent.WillEnter()
+		async UniTask IViewLifecycleEvent.WillEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.WillEnter();
-			}
-
-			return ViewWillEnter(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillEnter(), this);
+			await ViewWillEnter(View);
 		}
 
 		void IViewLifecycleEvent.DidEnter()
 		{
-			foreach (var child in Children)
-			{
-				child.DidEnter();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidEnter(), this);
 			ViewDidEnter(View);
 		}
 
-		UniTask IViewLifecycleEvent.WillExit()
+		async UniTask IViewLifecycleEvent.WillExit()
 		{
-			foreach (var child in Children)
-			{
-				child.WillExit();
-			}
-
-			return ViewWillExit(View);
+			await ChildLifecycle.RunAsync(Children, c => c.WillExit(), this);
+			await ViewWillExit(View);
 		}
 
 		void IViewLifecycleEvent.DidExit()
 		{
-			foreach (var child in Children)
-			{
-				child.DidExit();
-			}
-
+			ChildLifecycle.Run(Children, c => c.DidExit(), this);
 			ViewDidExit(View);
 		}
 
-		UniTask IViewLifecycleEvent.Cleanup()
+		async UniTask IViewLifecycleEvent.Cleanup()
 		{
-			foreach (var child in Children)
-			{
-				child.Cleanup();
-			}
-
-			return ViewWillDestroy(View);
+			await ChildLifecycle.RunAsync(Children, c => c.Cleanup(), this);
+			await ViewWillDestroy(View);
 		}
 
 		public override void UnRegister()
 		{
 			base.UnRegister();
 			Children.Clear();
+			_childrenAdded = false;
 		}
 
 		public override void Dispose()

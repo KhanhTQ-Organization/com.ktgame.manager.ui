@@ -23,11 +23,12 @@ namespace com.ktgame.manager.ui
 		public event Action<float> TransitionAnimationProgressChanged;
 
 		private readonly UniquePriorityList<IScreenLifecycleEvent> _lifecycleEvents = new();
-		private Progress<float> _transitionProgressReporter;
+		
+		private IProgress<float> _transitionProgressReporter;
 
-		private Progress<float> TransitionProgressReporter
+		private IProgress<float> TransitionProgressReporter
 		{
-			get { return _transitionProgressReporter ??= new Progress<float>(SetTransitionProgress); }
+			get { return _transitionProgressReporter ??= Cysharp.Threading.Tasks.Progress.Create<float>(ReportTransitionProgress); }
 		}
 
 		public void AddLifecycleEvent(IScreenLifecycleEvent lifecycleEvent, int priority = 0)
@@ -68,8 +69,7 @@ namespace com.ktgame.manager.ui
 
 			GetViews();
 
-			var tasks = _lifecycleEvents.Select(x => x.Initialize());
-			await WaitForAsync(tasks);
+			await RunLifecycleAsync(_lifecycleEvents, x => x.Initialize());
 		}
 
 		internal async UniTask BeforeEnterAsync(bool push)
@@ -82,11 +82,14 @@ namespace com.ktgame.manager.ui
 
 			Alpha = 0.0f;
 
-			var tasks = push
-				? _lifecycleEvents.Select(x => x.WillPushEnter())
-				: _lifecycleEvents.Select(x => x.WillPopEnter());
-
-			await WaitForAsync(tasks);
+			if (push)
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillPushEnter());
+			}
+			else
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillPopEnter());
+			}
 		}
 
 		internal async UniTask EnterAsync(bool push, bool playAnimation, ScreenView partnerScreen)
@@ -103,16 +106,16 @@ namespace com.ktgame.manager.ui
 				}
 
 				anim.Setup(RectTransform);
-				foreach (var transition in transitions)
+				for (var i = 0; i < transitions.Count; i++)
 				{
-					transition.OnAnimationBegin?.Invoke();
+					transitions[i].OnAnimationBegin?.Invoke();
 				}
 
 				await anim.PlayAsync(this.GetCancellationTokenOnDestroy(), TransitionProgressReporter);
 
-				foreach (var transition in transitions)
+				for (var i = 0; i < transitions.Count; i++)
 				{
-					transition.OnAnimationComplete?.Invoke();
+					transitions[i].OnAnimationComplete?.Invoke();
 				}
 
 				if (anim is ScriptableObject so)
@@ -159,11 +162,14 @@ namespace com.ktgame.manager.ui
 
 			Alpha = 1.0f;
 
-			var tasks = push
-				? _lifecycleEvents.Select(x => x.WillPushExit())
-				: _lifecycleEvents.Select(x => x.WillPopExit());
-
-			await WaitForAsync(tasks);
+			if (push)
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillPushExit());
+			}
+			else
+			{
+				await RunLifecycleAsync(_lifecycleEvents, x => x.WillPopExit());
+			}
 		}
 
 		internal async UniTask ExitAsync(bool push, bool playAnimation, ScreenView partnerScreen)
@@ -178,16 +184,16 @@ namespace com.ktgame.manager.ui
 				}
 
 				anim.Setup(RectTransform);
-				foreach (var transition in transitions)
+				for (var i = 0; i < transitions.Count; i++)
 				{
-					transition.OnAnimationBegin?.Invoke();
+					transitions[i].OnAnimationBegin?.Invoke();
 				}
 
 				await anim.PlayAsync(this.GetCancellationTokenOnDestroy(), TransitionProgressReporter);
 
-				foreach (var transition in transitions)
+				for (var i = 0; i < transitions.Count; i++)
 				{
-					transition.OnAnimationComplete?.Invoke();
+					transitions[i].OnAnimationComplete?.Invoke();
 				}
 
 				if (anim is ScriptableObject so)
@@ -222,10 +228,21 @@ namespace com.ktgame.manager.ui
 			TransitionAnimationType = null;
 		}
 
-		internal async UniTask BeforeReleaseAsync()
+		internal UniTask BeforeReleaseAsync()
 		{
-			var tasks = _lifecycleEvents.Select(x => x.Cleanup());
-			await WaitForAsync(tasks);
+			return RunLifecycleAsync(_lifecycleEvents, x => x.Cleanup());
+		}
+		
+		private void ReportTransitionProgress(float progress)
+		{
+			try
+			{
+				SetTransitionProgress(progress);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
 		}
 
 		private void SetTransitionProgress(float progress)

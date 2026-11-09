@@ -17,7 +17,7 @@ namespace com.ktgame.manager.ui
 			{
 				await UniTask.NextFrame(PlayerLoopTiming.Update, cancellationToken);
 				player.Update(Time.unscaledDeltaTime);
-				progress?.Report(player.Time / self.Duration);
+				progress?.Report(self.Duration > 0f ? player.Time / self.Duration : 1f);
 			}
 		}
 	}

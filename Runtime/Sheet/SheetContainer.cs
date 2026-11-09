@@ -16,6 +16,7 @@ namespace com.ktgame.manager.ui
 		
 		[ShowInInspector, ReadOnly] private readonly Dictionary<int, ViewRef<SheetView>> _sheetViews = new();
 		private int? _activeSheetId;
+		private readonly TransitionQueue _transitionQueue = new();
 
 		public IReadOnlyDictionary<int, ViewRef<SheetView>> SheetViews => _sheetViews;
 
@@ -137,9 +138,9 @@ namespace com.ktgame.manager.ui
 
 		private async UniTask ShowAsyncInternal(int sheetId, bool playAnimation)
 		{
-			if (IsInTransition)
+			var transitionKey = "show:" + sheetId;
+			if (await WaitForTransitionTurnAsync(transitionKey) == null)
 			{
-				Debug.LogError("Cannot transition because there is a sheet already in transition.");
 				return;
 			}
 
@@ -150,50 +151,66 @@ namespace com.ktgame.manager.ui
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var enterSheet = _sheetViews[sheetId].View;
-			enterSheet.Settings = Settings;
-
-			ViewRef<SheetView>? exitSheetRef = ActiveSheetId.HasValue ? _sheetViews[ActiveSheetId.Value] : null;
-			var exitSheet = exitSheetRef?.View;
-
-			if (exitSheet)
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				exitSheet.Settings = Settings;
+				var enterSheet = _sheetViews[sheetId].View;
+				enterSheet.Settings = Settings;
+
+				ViewRef<SheetView>? exitSheetRef = ActiveSheetId.HasValue ? _sheetViews[ActiveSheetId.Value] : null;
+				var exitSheet = exitSheetRef?.View;
+
+				if (exitSheet)
+				{
+					exitSheet.Settings = Settings;
+				}
+
+				if (exitSheet)
+				{
+					await exitSheet.BeforeExitAsync();
+				}
+
+				await enterSheet.BeforeEnterAsync();
+
+				if (exitSheet)
+				{
+					await exitSheet.ExitAsync(playAnimation, enterSheet);
+				}
+
+				await enterSheet.EnterAsync(playAnimation, exitSheet);
+
+				_activeSheetId = sheetId;
+				IsInTransition = false;
+				lockReleased = true;
+
+				if (exitSheet)
+				{
+					exitSheet.AfterExit();
+				}
+
+				enterSheet.AfterEnter();
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				completed = true;
 			}
-
-			if (exitSheet)
+			finally
 			{
-				await exitSheet.BeforeExitAsync();
-			}
-
-			await enterSheet.BeforeEnterAsync();
-
-			if (exitSheet)
-			{
-				await exitSheet.ExitAsync(playAnimation, enterSheet);
-			}
-
-			await enterSheet.EnterAsync(playAnimation, exitSheet);
-
-			_activeSheetId = sheetId;
-			IsInTransition = false;
-
-			if (exitSheet)
-			{
-				exitSheet.AfterExit();
-			}
-
-			enterSheet.AfterEnter();
-
-			if (Settings.EnableInteractionInTransition == false)
-			{
-				Interactable = true;
+				if (completed == false)
+				{
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
 		}
 
@@ -214,9 +231,9 @@ namespace com.ktgame.manager.ui
 
 		private async UniTask HideAsyncInternal(bool playAnimation)
 		{
-			if (IsInTransition)
+			const string transitionKey = "hide";
+			if (await WaitForTransitionTurnAsync(transitionKey) == null)
 			{
-				Debug.LogError("Cannot transition because there is a sheet already in transition.");
 				return;
 			}
 
@@ -227,27 +244,43 @@ namespace com.ktgame.manager.ui
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var exitSheet = _sheetViews[ActiveSheetId.Value].View;
-			exitSheet.Settings = Settings;
-
-			await exitSheet.BeforeExitAsync();
-
-			await exitSheet.ExitAsync(playAnimation, null);
-
-			_activeSheetId = null;
-			IsInTransition = false;
-
-			exitSheet.AfterExit();
-			
-			if (Settings.EnableInteractionInTransition == false)
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				Interactable = true;
+				var exitSheet = _sheetViews[ActiveSheetId.Value].View;
+				exitSheet.Settings = Settings;
+
+				await exitSheet.BeforeExitAsync();
+
+				await exitSheet.ExitAsync(playAnimation, null);
+
+				_activeSheetId = null;
+				IsInTransition = false;
+				lockReleased = true;
+
+				exitSheet.AfterExit();
+			
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				completed = true;
+			}
+			finally
+			{
+				if (completed == false)
+				{
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
 		}
 
@@ -264,6 +297,38 @@ namespace com.ktgame.manager.ui
 			}
 
 			sheets.Clear();
+		}
+
+		private async UniTask<bool?> WaitForTransitionTurnAsync(string transitionKey)
+		{
+			if (IsInTransition == false && _transitionQueue.HasPending == false)
+			{
+				return false;
+			}
+
+			if (_transitionQueue.IsDuplicate(transitionKey, IsInTransition))
+			{
+				Debug.LogError("Cannot transition because there is a sheet already in transition.");
+				return null;
+			}
+
+			var gotTurn = await _transitionQueue.WaitForTurnAsync(transitionKey, () => IsInTransition, this.GetCancellationTokenOnDestroy());
+			return gotTurn ? true : (bool?)null;
+		}
+		
+		private void RecoverFromFailedTransition(bool lockReleased)
+		{
+			if (lockReleased == false)
+			{
+				IsInTransition = false;
+			}
+
+			if (Settings.EnableInteractionInTransition == false)
+			{
+				Interactable = true;
+			}
+
+			Debug.LogWarning($"[SheetContainer] Transition in `{ContainerName}` failed, transition state has been restored.");
 		}
 	}
 }

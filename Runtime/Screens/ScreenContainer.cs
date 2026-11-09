@@ -11,6 +11,8 @@ namespace com.ktgame.manager.ui
 
 		private bool _isActiveScreenStacked;
 
+		private readonly TransitionQueue _transitionQueue = new();
+
 		public bool IsInTransition { get; private set; }
 
 		public override int ViewCount => _screens.Count;
@@ -193,82 +195,98 @@ namespace com.ktgame.manager.ui
 				throw new ArgumentNullException(nameof(resourcePath));
 			}
 
-			if (IsInTransition)
+			var transitionKey = "push:" + resourcePath;
+			if (await WaitForTransitionTurnAsync(transitionKey) == null)
 			{
-				Debug.LogWarning($"Cannot transition because there is a screen already in transition.");
 				return;
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var enterScreen = await GetViewAsync<TScreenView>(config.Config);
-			config.Config.ViewLoadedCallback?.Invoke(enterScreen);
-
-			await enterScreen.AfterLoadAsync(RectTransform);
-
-			ViewRef<ScreenView>? exitScreenRef = _screens.Count == 0 ? null : _screens[^1];
-			var exitScreen = exitScreenRef?.View;
-			var exitScreenId = exitScreen == null ? (int?)null : exitScreen.GetInstanceID();
-
-			if (exitScreen)
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				exitScreen.Settings = Settings;
-			}
+				var enterScreen = await GetViewAsync<TScreenView>(config.Config);
+				config.Config.ViewLoadedCallback?.Invoke(enterScreen);
 
-			if (exitScreen)
-			{
-				await exitScreen.BeforeExitAsync(true);
-			}
+				await enterScreen.AfterLoadAsync(RectTransform);
 
-			UIManager.ViewWillOpen?.Invoke(enterScreen);
+				ViewRef<ScreenView>? exitScreenRef = _screens.Count == 0 ? null : _screens[^1];
+				var exitScreen = exitScreenRef?.View;
+				var exitScreenId = exitScreen == null ? (int?)null : exitScreen.GetInstanceID();
+
+				if (exitScreen)
+				{
+					exitScreen.Settings = Settings;
+				}
+
+				if (exitScreen)
+				{
+					await exitScreen.BeforeExitAsync(true);
+				}
+
+				UIManager.ViewWillOpen?.Invoke(enterScreen);
 			
-			await enterScreen.BeforeEnterAsync(true);
+				await enterScreen.BeforeEnterAsync(true);
 
-			var animTasks = new List<UniTask>();
+				var animTasks = new List<UniTask>();
 
-			if (exitScreen)
-			{
-				animTasks.Add(exitScreen.ExitAsync(true, config.Config.PlayAnimation, enterScreen));
+				if (exitScreen)
+				{
+					animTasks.Add(exitScreen.ExitAsync(true, config.Config.PlayAnimation, enterScreen));
+				}
+
+				animTasks.Add(enterScreen.EnterAsync(true, config.Config.PlayAnimation, exitScreen));
+
+				await UniTask.WhenAll(animTasks);
+
+				if (_isActiveScreenStacked == false && exitScreenId.HasValue)
+				{
+					_screens.RemoveAt(_screens.Count - 1);
+				}
+
+				_screens.Add(new ViewRef<ScreenView>(enterScreen, resourcePath, config.Config.PoolingPolicy));
+				IsInTransition = false;
+				lockReleased = true;
+
+				if (exitScreen)
+				{
+					exitScreen.AfterExit(true);
+				}
+
+				enterScreen.AfterEnter(true);
+
+				if (_isActiveScreenStacked == false && exitScreenRef.HasValue)
+				{
+					await exitScreen.BeforeReleaseAsync();
+					DestroyAndForget(exitScreenRef.Value);
+				}
+
+				_isActiveScreenStacked = config.Stack;
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				UIManager.ViewOpened?.Invoke(enterScreen);
+
+				completed = true;
 			}
-
-			animTasks.Add(enterScreen.EnterAsync(true, config.Config.PlayAnimation, exitScreen));
-
-			await UniTask.WhenAll(animTasks);
-
-			if (_isActiveScreenStacked == false && exitScreenId.HasValue)
+			finally
 			{
-				_screens.RemoveAt(_screens.Count - 1);
+				if (completed == false)
+				{
+					RecoverFromFailedTransition(lockReleased);
+				}
 			}
-
-			_screens.Add(new ViewRef<ScreenView>(enterScreen, resourcePath, config.Config.PoolingPolicy));
-			IsInTransition = false;
-
-			if (exitScreen)
-			{
-				exitScreen.AfterExit(true);
-			}
-
-			enterScreen.AfterEnter(true);
-
-			if (_isActiveScreenStacked == false && exitScreenRef.HasValue)
-			{
-				await exitScreen.BeforeReleaseAsync();
-				DestroyAndForget(exitScreenRef.Value);
-			}
-
-			_isActiveScreenStacked = config.Stack;
-
-			if (Settings.EnableInteractionInTransition == false)
-			{
-				Interactable = true;
-			}
-
-			UIManager.ViewOpened?.Invoke(enterScreen);
 		}
 
 		private async UniTask PopAsyncInternal(bool playAnimation)
@@ -279,71 +297,126 @@ namespace com.ktgame.manager.ui
 				return;
 			}
 
-			if (IsInTransition)
+			const string transitionKey = "pop";
+			var waited = await WaitForTransitionTurnAsync(transitionKey);
+			if (waited == null)
 			{
-				Debug.LogWarning("Cannot transition because there is a screen already in transition.");
+				return;
+			}
+			
+			if (waited.Value && _screens.Count == 0)
+			{
+				Debug.LogWarning("[ScreenContainer] Pop skipped: the screen stack became empty while waiting for the previous transition.");
 				return;
 			}
 
 			IsInTransition = true;
+			_transitionQueue.MarkRunning(transitionKey);
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = false;
 			}
 
-			var lastScreen = _screens.Count - 1;
-			var exitScreenRef = _screens[lastScreen];
-			var exitScreen = exitScreenRef.View;
-			exitScreen.Settings = Settings;
-
-			var enterScreen = _screens.Count == 1 ? null : _screens[^2].View;
-
-			if (enterScreen)
+			var lockReleased = false;
+			var completed = false;
+			try
 			{
-				enterScreen.Settings = Settings;
-			}
+				var lastScreen = _screens.Count - 1;
+				var exitScreenRef = _screens[lastScreen];
+				var exitScreen = exitScreenRef.View;
+				exitScreen.Settings = Settings;
 
-			UIManager.ViewWillClose?.Invoke(exitScreen);
+				var enterScreen = _screens.Count == 1 ? null : _screens[^2].View;
+
+				if (enterScreen)
+				{
+					enterScreen.Settings = Settings;
+				}
+
+				UIManager.ViewWillClose?.Invoke(exitScreen);
 			
-			await exitScreen.BeforeExitAsync(false);
+				await exitScreen.BeforeExitAsync(false);
 
-			if (enterScreen)
+				if (enterScreen)
+				{
+					await enterScreen.BeforeEnterAsync(false);
+				}
+
+				var animTasks = new List<UniTask> { exitScreen.ExitAsync(false, playAnimation, enterScreen) };
+
+				if (enterScreen)
+				{
+					animTasks.Add(enterScreen.EnterAsync(false, playAnimation, exitScreen));
+				}
+
+				await UniTask.WhenAll(animTasks);
+
+				_screens.RemoveAt(lastScreen);
+				IsInTransition = false;
+				lockReleased = true;
+
+				exitScreen.AfterExit(false);
+
+				if (enterScreen)
+				{
+					enterScreen.AfterEnter(false);
+				}
+
+				await exitScreen.BeforeReleaseAsync();
+
+				DestroyAndForget(exitScreenRef);
+
+				_isActiveScreenStacked = true;
+
+				if (Settings.EnableInteractionInTransition == false)
+				{
+					Interactable = true;
+				}
+
+				UIManager.ViewClosed?.Invoke(exitScreen);
+
+				completed = true;
+			}
+			finally
 			{
-				await enterScreen.BeforeEnterAsync(false);
+				if (completed == false)
+				{
+					RecoverFromFailedTransition(lockReleased);
+				}
+			}
+		}
+		
+		private async UniTask<bool?> WaitForTransitionTurnAsync(string transitionKey)
+		{
+			if (IsInTransition == false && _transitionQueue.HasPending == false)
+			{
+				return false;
 			}
 
-			var animTasks = new List<UniTask> { exitScreen.ExitAsync(false, playAnimation, enterScreen) };
-
-			if (enterScreen)
+			if (_transitionQueue.IsDuplicate(transitionKey, IsInTransition))
 			{
-				animTasks.Add(enterScreen.EnterAsync(false, playAnimation, exitScreen));
+				Debug.LogWarning("Cannot transition because there is a screen already in transition.");
+				return null;
 			}
 
-			await UniTask.WhenAll(animTasks);
-
-			_screens.RemoveAt(lastScreen);
-			IsInTransition = false;
-
-			exitScreen.AfterExit(false);
-
-			if (enterScreen)
+			var gotTurn = await _transitionQueue.WaitForTurnAsync(transitionKey, () => IsInTransition, this.GetCancellationTokenOnDestroy());
+			return gotTurn ? true : (bool?)null;
+		}
+		
+		private void RecoverFromFailedTransition(bool lockReleased)
+		{
+			if (lockReleased == false)
 			{
-				enterScreen.AfterEnter(false);
+				IsInTransition = false;
 			}
-
-			await exitScreen.BeforeReleaseAsync();
-
-			DestroyAndForget(exitScreenRef);
-
-			_isActiveScreenStacked = true;
 
 			if (Settings.EnableInteractionInTransition == false)
 			{
 				Interactable = true;
 			}
 
-			UIManager.ViewClosed?.Invoke(exitScreen);
+			Debug.LogWarning($"[ScreenContainer] Transition in `{ContainerName}` failed, transition state has been restored.");
 		}
 	}
 }
